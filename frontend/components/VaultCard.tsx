@@ -39,7 +39,7 @@ const VaultCard = ({ vault }: VaultCardProps) => {
         <div className="flex items-center space-x-2 mb-2">
           <Coins className="h-5 w-5 text-primary" />
           <span className="text-2xl font-bold text-foreground">
-            {vault.balance.toLocaleString()} <span className="text-lg text-muted-foreground">USDC</span>
+            {vault.balance.toLocaleString()} <span className="text-lg text-muted-foreground">APT</span>
           </span>
         </div>
         <div className="text-sm text-muted-foreground">

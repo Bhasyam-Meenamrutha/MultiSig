@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Vault, WithdrawalRequest, Transaction } from '@/types/vault';
 import { toast } from '@/hooks/use-toast';
+import { NETWORK, MODULE_ADDRESS } from '../constants';
+import { AptosClient } from 'aptos';
 
 interface VaultContextType {
   vaults: Vault[];
@@ -8,8 +10,10 @@ interface VaultContextType {
   transactions: Transaction[];
   currentUser: string;
   availableAccounts: { address: string; name: string }[];
+  isLoading: boolean;
   setCurrentUser: (address: string) => void;
   createVault: (vault: Omit<Vault, 'id' | 'createdAt'>) => void;
+  refreshVaults: () => void;
   deposit: (vaultId: string, amount: number) => void;
   requestWithdrawal: (vaultId: string, amount: number, purpose: string) => void;
   approveRequest: (requestId: string) => void;
@@ -29,25 +33,9 @@ export const useVault = () => {
   return context;
 };
 
-// Mock data for demonstration
-const mockVaults: Vault[] = [
-  {
-    id: 'vault-1',
-    name: 'Emergency Fund',
-    members: ['0x1234...5678', '0x9876...5432'],
-    signaturesRequired: 2,
-    balance: 5000,
-    createdAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-  },
-  {
-    id: 'vault-2',
-    name: 'Vacation Savings',
-    members: ['0x1234...5678', '0x9876...5432', '0xabcd...efgh'],
-    signaturesRequired: 2,
-    balance: 2500,
-    createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
-  },
-];
+const NODE_URL = `https://fullnode.${NETWORK}.aptoslabs.com/v1`;
+const MODULE_NAME = "multisig";
+const client = new AptosClient(NODE_URL);
 
 const availableAccounts = [
   { address: '0x1234...5678', name: 'Account 1' },
@@ -56,10 +44,106 @@ const availableAccounts = [
 ];
 
 export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [vaults, setVaults] = useState<Vault[]>(mockVaults);
+  const [vaults, setVaults] = useState<Vault[]>([]);
   const [withdrawalRequests, setWithdrawalRequests] = useState<WithdrawalRequest[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [currentUser, setCurrentUser] = useState('0x1234...5678'); // Mock current user
+  const [currentUser, setCurrentUser] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Get current user from wallet
+  useEffect(() => {
+    const getCurrentUser = async () => {
+      if (window.aptos) {
+        try {
+          const isConnected = await window.aptos.isConnected();
+          if (isConnected) {
+            const account = await window.aptos.account();
+            setCurrentUser(account.address);
+          }
+        } catch (error) {
+          console.error('Error getting current user:', error);
+        }
+      }
+    };
+    getCurrentUser();
+  }, []);
+
+  // Fetch vaults from blockchain
+    // Fetch all vaults from blockchain where current user is a member
+  const fetchVaultsFromBlockchain = async () => {
+    if (!currentUser) return;
+    
+    setIsLoading(true);
+    try {
+      // Get all vault owners from registry
+      const vaultOwnersResult = await client.view({
+        function: `${MODULE_ADDRESS}::${MODULE_NAME}::get_all_vault_owners`,
+        type_arguments: [],
+        arguments: [],
+      });
+      
+      const vaultOwners = vaultOwnersResult[0] as string[] || [];
+      const userVaults: Vault[] = [];
+      
+      // Check each vault to see if current user is a member or creator
+      for (const owner of vaultOwners) {
+        try {
+          // Check if user is member of this vault
+          const isMemberResult = await client.view({
+            function: `${MODULE_ADDRESS}::${MODULE_NAME}::is_user_vault_member`,
+            type_arguments: [],
+            arguments: [currentUser, owner],
+          });
+          
+          if (isMemberResult[0] === true) {
+            // Get vault info
+            const vaultInfoResult = await client.view({
+              function: `${MODULE_ADDRESS}::${MODULE_NAME}::get_vault_info`,
+              type_arguments: [],
+              arguments: [owner],
+            });
+            
+            const [id, name, , , requiredSignatures, balance, createdAt] = vaultInfoResult as [number, string, string, number, number, number, number];
+            
+            // Get members
+            const membersResult = await client.view({
+              function: `${MODULE_ADDRESS}::${MODULE_NAME}::get_vault_members`,
+              type_arguments: [],
+              arguments: [owner],
+            });
+            
+            const members = (membersResult[0] as any[] || []).map((member: any) => member.address);
+            
+            const vault: Vault = {
+              id: id.toString(),
+              name,
+              members,
+              signaturesRequired: requiredSignatures,
+              balance: balance / 100000000, // Convert from octas to APT
+              createdAt: new Date(createdAt * 1000), // Convert from seconds to milliseconds
+            };
+            
+            userVaults.push(vault);
+          }
+        } catch (error) {
+          console.error(`Error fetching vault ${owner}:`, error);
+        }
+      }
+      
+      setVaults(userVaults);
+    } catch (error) {
+      console.error('Error fetching vaults:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Refresh vaults when current user changes
+  useEffect(() => {
+    if (currentUser) {
+      fetchVaultsFromBlockchain();
+    }
+  }, [currentUser]);
 
   // Check for expired requests
   useEffect(() => {
@@ -88,16 +172,17 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => clearInterval(interval);
   }, []);
 
-  const createVault = (vaultData: Omit<Vault, 'id' | 'createdAt'>) => {
-    const newVault: Vault = {
-      ...vaultData,
-      id: `vault-${Date.now()}`,
-      createdAt: new Date(),
-    };
-    setVaults(prev => [...prev, newVault]);
+  const refreshVaults = () => {
+    fetchVaultsFromBlockchain();
+  };
+
+  const createVault = (_vaultData: Omit<Vault, 'id' | 'createdAt'>) => {
+    // This is now called after successful blockchain transaction
+    // Just refresh the vaults from blockchain
+    fetchVaultsFromBlockchain();
     toast({
       title: "Vault Created",
-      description: `${newVault.name} has been successfully created.`,
+      description: "Vault has been successfully created on blockchain.",
     });
   };
 
@@ -278,8 +363,10 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       transactions,
       currentUser,
       availableAccounts,
+      isLoading,
       setCurrentUser,
       createVault,
+      refreshVaults,
       deposit,
       requestWithdrawal,
       approveRequest,

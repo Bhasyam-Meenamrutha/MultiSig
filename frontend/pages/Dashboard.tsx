@@ -8,7 +8,7 @@ import Hero from '@/components/Hero';
 import Footer from '@/components/Footer';
 
 const Dashboard = () => {
-  const { vaults, withdrawalRequests } = useVault();
+  const { vaults, withdrawalRequests, isLoading } = useVault();
   const [filter, setFilter] = useState<'all' | 'active' | 'pending'>('all');
 
   const totalBalance = vaults.reduce((sum, vault) => sum + vault.balance, 0);
@@ -67,7 +67,7 @@ const Dashboard = () => {
             <TrendingUp className="h-8 w-8 text-success" />
             <div>
               <p className="text-sm text-muted-foreground">Total Balance</p>
-              <p className="text-2xl font-bold">{totalBalance.toLocaleString()} USDC</p>
+              <p className="text-2xl font-bold">{totalBalance.toLocaleString()} APT</p>
             </div>
           </div>
         </div>
@@ -107,7 +107,12 @@ const Dashboard = () => {
       </div>
 
       {/* Vaults Grid */}
-      {filteredVaults.length > 0 ? (
+      {isLoading ? (
+        <div className="text-center py-12">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <p className="mt-4 text-muted-foreground">Loading your vaults from blockchain...</p>
+        </div>
+      ) : filteredVaults.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredVaults.map((vault) => (
             <VaultCard key={vault.id} vault={vault} />
