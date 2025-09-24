@@ -205,7 +205,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         arguments: [vaultOwner, amountInOctas.toString()],
       };
 
-      const response = await window.aptos.signAndSubmitTransaction(payload);
+      const response = await window.aptos.signAndSubmitTransaction({ payload });
       if (!response?.hash) throw new Error("Transaction failed");
       
       await client.waitForTransaction(response.hash);
@@ -219,7 +219,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       };
 
       try {
-        const updateResponse = await window.aptos.signAndSubmitTransaction(updateHashPayload);
+        const updateResponse = await window.aptos.signAndSubmitTransaction({ payload: updateHashPayload });
         if (updateResponse?.hash) {
           await client.waitForTransaction(updateResponse.hash);
         }

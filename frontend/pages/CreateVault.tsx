@@ -99,7 +99,7 @@ const CreateVault = () => {
       };
 
       console.log('Initializing Vault Registry...');
-      const response = await window.aptos?.signAndSubmitTransaction(payload);
+      const response = await window.aptos?.signAndSubmitTransaction({ payload });
       if (!response?.hash) throw new Error("Transaction failed");
       await client.waitForTransaction(response.hash);
       console.log('Vault Registry initialized successfully!');
@@ -166,7 +166,7 @@ const CreateVault = () => {
     };
 
     try {
-      const response = await window.aptos?.signAndSubmitTransaction(payload);
+      const response = await window.aptos?.signAndSubmitTransaction({ payload });
       if (!response?.hash) throw new Error("Transaction failed");
       await client.waitForTransaction(response.hash);
       toast({ title: "Vault Created!", description: `Tx: ${response.hash.slice(0, 10)}...` });

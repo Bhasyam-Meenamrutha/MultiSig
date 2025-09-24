@@ -1,3 +1,5 @@
 export const NETWORK = import.meta.env.VITE_APP_NETWORK ?? "testnet";
-export const MODULE_ADDRESS = "0x" + import.meta.env.VITE_MODULE_PUBLISHER_ACCOUNT_ADDRESS;
+export const MODULE_ADDRESS = import.meta.env.VITE_MODULE_PUBLISHER_ACCOUNT_ADDRESS?.startsWith('0x') 
+  ? import.meta.env.VITE_MODULE_PUBLISHER_ACCOUNT_ADDRESS 
+  : "0x" + import.meta.env.VITE_MODULE_PUBLISHER_ACCOUNT_ADDRESS;
 export const APTOS_API_KEY = import.meta.env.VITE_APTOS_API_KEY;

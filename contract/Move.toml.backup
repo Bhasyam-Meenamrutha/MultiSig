@@ -4,7 +4,7 @@ version = "1.0.0"
 authors = []
 
 [addresses]
-meena_add = "af02d2a79eec683cb11db4c3f13bc8b1a690de36f880e7f52b00b5e472d14bb2"
+meena_add = "0ab14dfb8d8e1bb2393f8d90fdeda5f9a3891acde7d5059ff34292a910fbdb9c"
 
 [dependencies]
 AptosFramework = { git = "https://github.com/aptos-labs/aptos-framework.git", rev = "mainnet", subdir = "aptos-framework" }
