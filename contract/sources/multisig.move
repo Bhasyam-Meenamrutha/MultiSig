@@ -6,6 +6,7 @@ module meena_add::multisig{
     use aptos_framework::aptos_coin::AptosCoin;
     use aptos_std::table::{Self, Table};
     use aptos_framework::timestamp;
+    use aptos_framework::account;
 
     // Error codes
     const EVAULT_NOT_FOUND: u64 = 1001;
@@ -57,7 +58,8 @@ module meena_add::multisig{
         creator: address,
         members: vector<VaultMember>,
         required_signatures: u64,
-        balance: coin::Coin<AptosCoin>,
+        resource_account: address, // The sub-account that holds all vault funds
+        resource_signer_cap: account::SignerCapability, // To control the resource account
         pending_transactions: vector<PendingTransaction>,
         transaction_history: vector<TransactionHistory>,
         transaction_counter: u64,
@@ -164,6 +166,21 @@ module meena_add::multisig{
             i = i + 1;
         };
 
+        // Create a resource account for this vault to hold all funds
+        let vault_seed = b"vault_";
+        // Add vault_id to seed as bytes (simple conversion)
+        vector::push_back(&mut vault_seed, (vault_id as u8));
+        if (vault_id > 255) {
+            vector::push_back(&mut vault_seed, ((vault_id / 256) as u8));
+        };
+        let (resource_signer, resource_signer_cap) = account::create_resource_account(creator, vault_seed);
+        let resource_account_addr = signer::address_of(&resource_signer);
+        
+        // Register the resource account to hold AptosCoin
+        if (!coin::is_account_registered<AptosCoin>(resource_account_addr)) {
+            coin::register<AptosCoin>(&resource_signer);
+        };
+
         // Create the vault
         let vault = Vault {
             id: vault_id,
@@ -171,7 +188,8 @@ module meena_add::multisig{
             creator: creator_addr,
             members,
             required_signatures,
-            balance: coin::zero<AptosCoin>(),
+            resource_account: resource_account_addr,
+            resource_signer_cap,
             pending_transactions: vector::empty<PendingTransaction>(),
             transaction_history: vector::empty<TransactionHistory>(),
             transaction_counter: 0,
@@ -221,9 +239,8 @@ module meena_add::multisig{
         let is_member = vault.creator == user_addr || is_vault_member(user_addr, &vault.members);
         assert!(is_member, ENOT_VAULT_MEMBER);
 
-        // Withdraw from user and deposit to vault
-        let coins = coin::withdraw<AptosCoin>(user, amount);
-        coin::merge(&mut vault.balance, coins);
+        // Transfer funds directly to the vault's resource account
+        coin::transfer<AptosCoin>(user, vault.resource_account, amount);
 
         // Record deposit transaction in history
         vault.transaction_counter = vault.transaction_counter + 1;
@@ -231,7 +248,7 @@ module meena_add::multisig{
             id: vault.transaction_counter,
             tx_type: string::utf8(b"deposit"),
             from: user_addr,
-            to: vault_owner,
+            to: vault.resource_account,
             amount,
             description: string::utf8(b"Deposit to vault"),
             tx_hash: string::utf8(b""), // Will be updated from frontend
@@ -282,7 +299,7 @@ module meena_add::multisig{
         assert!(is_member, ENOT_VAULT_MEMBER);
 
         // Check if vault has sufficient balance
-        let vault_balance = coin::value(&vault.balance);
+        let vault_balance = coin::balance<AptosCoin>(vault.resource_account);
         assert!(vault_balance >= amount, EINSUFFICIENT_BALANCE);
 
         // Create pending transaction
@@ -347,7 +364,7 @@ module meena_add::multisig{
         let withdrawal_history = TransactionHistory {
             id: vault.transaction_counter,
             tx_type: string::utf8(b"withdrawal"),
-            from: vault.creator, // Use vault creator address as vault identifier
+            from: vault.resource_account, // Use vault resource account as source
             to: transaction.to,
             amount: transaction.amount,
             description: transaction.description,
@@ -357,11 +374,11 @@ module meena_add::multisig{
         };
         vector::push_back(&mut vault.transaction_history, withdrawal_history);
         
-        // Extract coins from vault
-        let coins = coin::extract(&mut vault.balance, transaction.amount);
+        // Get signer capability for the resource account to make transfers
+        let resource_signer = account::create_signer_with_capability(&vault.resource_signer_cap);
         
-        // Deposit to recipient
-        coin::deposit(transaction.to, coins);
+        // Transfer from vault's resource account to recipient
+        coin::transfer<AptosCoin>(&resource_signer, transaction.to, transaction.amount);
         
         // Mark as executed
         transaction.executed = true;
@@ -407,8 +424,18 @@ module meena_add::multisig{
             vault.creator,
             vector::length(&vault.members),
             vault.required_signatures,
-            coin::value(&vault.balance),
+            coin::balance<AptosCoin>(vault.resource_account), // Get balance from resource account
             vault.created_at
+        )
+    }
+
+    #[view]
+    public fun get_vault_resource_account(vault_owner: address): (address, u64) acquires Vault {
+        assert!(exists<Vault>(vault_owner), EVAULT_NOT_FOUND);
+        let vault = borrow_global<Vault>(vault_owner);
+        (
+            vault.resource_account,
+            coin::balance<AptosCoin>(vault.resource_account)
         )
     }
 
@@ -449,7 +476,7 @@ module meena_add::multisig{
     public fun get_vault_balance(vault_owner: address): u64 acquires Vault {
         assert!(exists<Vault>(vault_owner), EVAULT_NOT_FOUND);
         let vault = borrow_global<Vault>(vault_owner);
-        coin::value(&vault.balance)
+        coin::balance<AptosCoin>(vault.resource_account)
     }
 
     #[view]

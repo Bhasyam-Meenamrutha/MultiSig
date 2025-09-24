@@ -22,6 +22,7 @@ interface VaultContextType {
   getRequestsForVault: (vaultId: string) => WithdrawalRequest[];
   getTransactionsForVault: (vaultId: string) => Transaction[];
   getTransactionHistory: (vaultOwner: string) => Promise<TransactionHistory[]>;
+  getVaultResourceAccount: (vaultOwner: string) => Promise<{address: string; balance: number} | null>;
 }
 
 const VaultContext = createContext<VaultContextType | undefined>(undefined);
@@ -272,6 +273,25 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, []); // Empty dependency array since it doesn't depend on any changing values
 
+  const getVaultResourceAccount = useCallback(async (vaultOwner: string): Promise<{address: string; balance: number} | null> => {
+    try {
+      const resourceResult = await client.view({
+        function: `${MODULE_ADDRESS}::multisig::get_vault_resource_account`,
+        type_arguments: [],
+        arguments: [vaultOwner],
+      });
+
+      const [resourceAddress, balance] = resourceResult as [string, string];
+      return {
+        address: resourceAddress,
+        balance: parseInt(balance) / 100000000, // Convert from octas to APT
+      };
+    } catch (error) {
+      console.error('Error fetching vault resource account:', error);
+      return null;
+    }
+  }, []); // Empty dependency array since it doesn't depend on any changing values
+
   const requestWithdrawal = (vaultId: string, amount: number, purpose: string) => {
     const vault = vaults.find(v => v.id === vaultId);
     if (!vault) return;
@@ -436,6 +456,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       getRequestsForVault,
       getTransactionsForVault,
       getTransactionHistory,
+      getVaultResourceAccount,
     }}>
       {children}
     </VaultContext.Provider>

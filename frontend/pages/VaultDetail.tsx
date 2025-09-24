@@ -16,6 +16,7 @@ const VaultDetail = () => {
     getVaultById, 
     getRequestsForVault,
     getTransactionHistory,
+    getVaultResourceAccount,
     deposit, 
     requestWithdrawal, 
     approveRequest, 
@@ -33,6 +34,8 @@ const VaultDetail = () => {
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
   const [blockchainHistory, setBlockchainHistory] = useState<TransactionHistory[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [resourceAccount, setResourceAccount] = useState<{address: string; balance: number} | null>(null);
+  const [loadingResourceAccount, setLoadingResourceAccount] = useState(false);
 
   if (!vault) {
     return (
@@ -47,23 +50,30 @@ const VaultDetail = () => {
 
   const pendingRequests = requests.filter(r => r.status === 'pending');
 
-  // Fetch transaction history from blockchain
+  // Fetch transaction history and resource account from blockchain
   useEffect(() => {
-    const fetchHistory = async () => {
+    const fetchData = async () => {
       if (!vault?.ownerAddress) return;
       setLoadingHistory(true);
+      setLoadingResourceAccount(true);
       try {
+        // Fetch transaction history
         const history = await getTransactionHistory(vault.ownerAddress);
         setBlockchainHistory(history);
+
+        // Fetch resource account details
+        const resourceAccountData = await getVaultResourceAccount(vault.ownerAddress);
+        setResourceAccount(resourceAccountData);
       } catch (error) {
-        console.error('Failed to fetch transaction history:', error);
+        console.error('Failed to fetch data:', error);
       } finally {
         setLoadingHistory(false);
+        setLoadingResourceAccount(false);
       }
     };
 
-    fetchHistory();
-  }, [vault?.ownerAddress, getTransactionHistory]); // Only depend on ownerAddress, not the entire vault object
+    fetchData();
+  }, [vault?.ownerAddress, getTransactionHistory, getVaultResourceAccount]); // Only depend on ownerAddress, not the entire vault object
 
   const handleDeposit = async () => {
     const amount = parseFloat(depositAmount);
@@ -132,9 +142,14 @@ const VaultDetail = () => {
           
           <div className="text-right">
             <div className="text-3xl font-bold text-primary">
-              {vault.balance.toLocaleString()} USDC
+              {loadingResourceAccount ? "Loading..." : `${resourceAccount?.balance?.toLocaleString() || '0'} APT`}
             </div>
             <div className="text-sm text-muted-foreground">Current Balance</div>
+            {resourceAccount && (
+              <div className="text-xs text-muted-foreground mt-1">
+                Pool Address: {resourceAccount.address.slice(0, 6)}...{resourceAccount.address.slice(-4)}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -206,11 +221,11 @@ const VaultDetail = () => {
                         onChange={(e) => setWithdrawAmount(e.target.value)}
                         placeholder="0.00"
                         min="0"
-                        max={vault.balance}
+                        max={resourceAccount?.balance || 0}
                         step="0.01"
                       />
                       <div className="text-sm text-muted-foreground mt-1">
-                        Available: {vault.balance.toLocaleString()} APT
+                        Available: {resourceAccount?.balance?.toLocaleString() || '0'} APT
                       </div>
                     </div>
                     <div>
@@ -319,6 +334,40 @@ const VaultDetail = () => {
 
         {/* Sidebar */}
         <div className="space-y-6">
+          {/* Vault Pool Information */}
+          <div className="vault-card">
+            <h3 className="text-lg font-bold mb-4">Vault Pool Details</h3>
+            {loadingResourceAccount ? (
+              <div className="text-center py-4">
+                <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+                <p className="text-sm text-muted-foreground mt-2">Loading pool details...</p>
+              </div>
+            ) : resourceAccount ? (
+              <div className="space-y-3">
+                <div>
+                  <div className="text-sm font-medium text-muted-foreground">Pool Address</div>
+                  <div className="font-mono text-sm break-all bg-muted p-2 rounded">
+                    {resourceAccount.address}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-muted-foreground">Total Balance</div>
+                  <div className="text-lg font-bold text-primary">
+                    {resourceAccount.balance.toLocaleString()} APT
+                  </div>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  ✅ All deposits are secured in this dedicated pool account.
+                  Funds can only be withdrawn through multisig approval.
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-4 text-muted-foreground">
+                Unable to load pool information
+              </div>
+            )}
+          </div>
+
           {/* Members */}
           <div className="vault-card">
             <h3 className="text-lg font-bold mb-4">Vault Members</h3>
