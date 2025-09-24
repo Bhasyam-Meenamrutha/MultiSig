@@ -5,6 +5,7 @@ export interface Vault {
   signaturesRequired: number;
   balance: number;
   createdAt: Date;
+  ownerAddress: string; // The actual vault owner address for blockchain operations
 }
 
 export interface WithdrawalRequest {
@@ -29,6 +30,18 @@ export interface Transaction {
   purpose?: string;
   withdrawalRequestId?: string;
   timestamp: Date;
+}
+
+export interface TransactionHistory {
+  id: number;
+  txType: 'deposit' | 'withdrawal' | 'transfer';
+  from: string;
+  to: string;
+  amount: number;
+  description: string;
+  txHash: string;
+  timestamp: number; // Unix timestamp from blockchain
+  executedBy: string;
 }
 
 export interface VaultMember {

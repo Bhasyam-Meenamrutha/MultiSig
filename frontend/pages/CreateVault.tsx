@@ -175,6 +175,7 @@ const CreateVault = () => {
         members: memberAddresses,
         signaturesRequired,
         balance: 0,
+        ownerAddress: walletAddress, // Use the current user's wallet address as owner
       });
       navigate('/');
     } catch (err: any) {

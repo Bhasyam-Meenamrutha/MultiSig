@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { Vault, WithdrawalRequest, Transaction } from '@/types/vault';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { Vault, WithdrawalRequest, Transaction, TransactionHistory } from '@/types/vault';
 import { toast } from '@/hooks/use-toast';
 import { NETWORK, MODULE_ADDRESS } from '../constants';
 import { AptosClient } from 'aptos';
@@ -14,13 +14,14 @@ interface VaultContextType {
   setCurrentUser: (address: string) => void;
   createVault: (vault: Omit<Vault, 'id' | 'createdAt'>) => void;
   refreshVaults: () => void;
-  deposit: (vaultId: string, amount: number) => void;
+  deposit: (vaultOwner: string, amount: number) => Promise<boolean>;
   requestWithdrawal: (vaultId: string, amount: number, purpose: string) => void;
   approveRequest: (requestId: string) => void;
   rejectRequest: (requestId: string) => void;
   getVaultById: (id: string) => Vault | undefined;
   getRequestsForVault: (vaultId: string) => WithdrawalRequest[];
   getTransactionsForVault: (vaultId: string) => Transaction[];
+  getTransactionHistory: (vaultOwner: string) => Promise<TransactionHistory[]>;
 }
 
 const VaultContext = createContext<VaultContextType | undefined>(undefined);
@@ -68,9 +69,8 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     getCurrentUser();
   }, []);
 
-  // Fetch vaults from blockchain
-    // Fetch all vaults from blockchain where current user is a member
-  const fetchVaultsFromBlockchain = async () => {
+  // Fetch all vaults from blockchain where current user is a member
+  const fetchVaultsFromBlockchain = useCallback(async () => {
     if (!currentUser) return;
     
     setIsLoading(true);
@@ -121,6 +121,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               signaturesRequired: requiredSignatures,
               balance: balance / 100000000, // Convert from octas to APT
               createdAt: new Date(createdAt * 1000), // Convert from seconds to milliseconds
+              ownerAddress: owner, // Store the actual vault owner address
             };
             
             userVaults.push(vault);
@@ -136,7 +137,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentUser]); // Depend only on currentUser
 
   // Refresh vaults when current user changes
   useEffect(() => {
@@ -172,9 +173,9 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => clearInterval(interval);
   }, []);
 
-  const refreshVaults = () => {
+  const refreshVaults = useCallback(() => {
     fetchVaultsFromBlockchain();
-  };
+  }, [fetchVaultsFromBlockchain]);
 
   const createVault = (_vaultData: Omit<Vault, 'id' | 'createdAt'>) => {
     // This is now called after successful blockchain transaction
@@ -186,30 +187,90 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   };
 
-  const deposit = (vaultId: string, amount: number) => {
-    setVaults(prev => 
-      prev.map(vault => 
-        vault.id === vaultId 
-          ? { ...vault, balance: vault.balance + amount }
-          : vault
-      )
-    );
+  const deposit = async (vaultOwner: string, amount: number): Promise<boolean> => {
+    if (!currentUser || !window.aptos) {
+      toast({ title: "Error", description: "Wallet not connected", variant: "destructive" });
+      return false;
+    }
 
-    const transaction: Transaction = {
-      id: Date.now().toString(),
-      vaultId,
-      type: 'deposit',
-      amount,
-      from: currentUser,
-      timestamp: new Date(),
-    };
-    setTransactions(prev => [...prev, transaction]);
+    try {
+      // Convert APT to octas (1 APT = 100,000,000 octas)
+      const amountInOctas = Math.floor(amount * 100000000);
 
-    toast({
-      title: "Deposit Successful",
-      description: `${amount} tokens deposited to vault.`,
-    });
+      const payload = {
+        type: "entry_function_payload",
+        function: `${MODULE_ADDRESS}::multisig::deposit_to_vault`,
+        type_arguments: [],
+        arguments: [vaultOwner, amountInOctas.toString()],
+      };
+
+      const response = await window.aptos.signAndSubmitTransaction(payload);
+      if (!response?.hash) throw new Error("Transaction failed");
+      
+      await client.waitForTransaction(response.hash);
+
+      // Update transaction hash in the contract
+      const updateHashPayload = {
+        type: "entry_function_payload", 
+        function: `${MODULE_ADDRESS}::multisig::update_transaction_hash`,
+        type_arguments: [],
+        arguments: [vaultOwner, response.hash],
+      };
+
+      try {
+        const updateResponse = await window.aptos.signAndSubmitTransaction(updateHashPayload);
+        if (updateResponse?.hash) {
+          await client.waitForTransaction(updateResponse.hash);
+        }
+      } catch (error) {
+        console.warn("Failed to update transaction hash:", error);
+      }
+
+      // Refresh vaults to show updated balance
+      fetchVaultsFromBlockchain();
+
+      toast({
+        title: "Deposit Successful",
+        description: `${amount} APT deposited successfully! Tx: ${response.hash.slice(0, 10)}...`,
+      });
+
+      return true;
+    } catch (error: any) {
+      console.error('Deposit failed:', error);
+      toast({
+        title: "Deposit Failed",
+        description: error?.message || "Failed to deposit funds",
+        variant: "destructive",
+      });
+      return false;
+    }
   };
+
+  const getTransactionHistory = useCallback(async (vaultOwner: string): Promise<TransactionHistory[]> => {
+    try {
+      const historyResult = await client.view({
+        function: `${MODULE_ADDRESS}::multisig::get_transaction_history`,
+        type_arguments: [],
+        arguments: [vaultOwner],
+      });
+
+      const historyData = historyResult[0] as any[];
+      return historyData.map((tx: any) => ({
+        id: parseInt(tx.id),
+        txType: tx.tx_type as 'deposit' | 'withdrawal' | 'transfer',
+        from: tx.from,
+        to: tx.to,
+        amount: parseInt(tx.amount) / 100000000, // Convert from octas to APT
+        description: tx.description,
+        txHash: tx.tx_hash,
+        timestamp: parseInt(tx.timestamp),
+        executedBy: tx.executed_by,
+      }));
+    } catch (error) {
+      console.error('Error fetching transaction history:', error);
+      return [];
+    }
+  }, []); // Empty dependency array since it doesn't depend on any changing values
 
   const requestWithdrawal = (vaultId: string, amount: number, purpose: string) => {
     const vault = vaults.find(v => v.id === vaultId);
@@ -374,6 +435,7 @@ export const VaultProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       getVaultById,
       getRequestsForVault,
       getTransactionsForVault,
+      getTransactionHistory,
     }}>
       {children}
     </VaultContext.Provider>

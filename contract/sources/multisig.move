@@ -37,6 +37,19 @@ module meena_add::multisig{
         executed: bool,
     }
 
+    // Struct to represent completed transactions (history)
+    struct TransactionHistory has copy, drop, store {
+        id: u64,
+        tx_type: String, // "deposit", "withdrawal", "transfer"
+        from: address,
+        to: address,
+        amount: u64,
+        description: String,
+        tx_hash: String, // Store transaction hash
+        timestamp: u64,
+        executed_by: address, // Who executed/approved the transaction
+    }
+
     // Main vault structure
     struct Vault has key, store {
         id: u64,
@@ -46,6 +59,7 @@ module meena_add::multisig{
         required_signatures: u64,
         balance: coin::Coin<AptosCoin>,
         pending_transactions: vector<PendingTransaction>,
+        transaction_history: vector<TransactionHistory>,
         transaction_counter: u64,
         created_at: u64,
     }
@@ -159,6 +173,7 @@ module meena_add::multisig{
             required_signatures,
             balance: coin::zero<AptosCoin>(),
             pending_transactions: vector::empty<PendingTransaction>(),
+            transaction_history: vector::empty<TransactionHistory>(),
             transaction_counter: 0,
             created_at: timestamp::now_seconds(),
         };
@@ -209,6 +224,44 @@ module meena_add::multisig{
         // Withdraw from user and deposit to vault
         let coins = coin::withdraw<AptosCoin>(user, amount);
         coin::merge(&mut vault.balance, coins);
+
+        // Record deposit transaction in history
+        vault.transaction_counter = vault.transaction_counter + 1;
+        let deposit_history = TransactionHistory {
+            id: vault.transaction_counter,
+            tx_type: string::utf8(b"deposit"),
+            from: user_addr,
+            to: vault_owner,
+            amount,
+            description: string::utf8(b"Deposit to vault"),
+            tx_hash: string::utf8(b""), // Will be updated from frontend
+            timestamp: timestamp::now_seconds(),
+            executed_by: user_addr,
+        };
+        vector::push_back(&mut vault.transaction_history, deposit_history);
+    }
+
+    // Update transaction hash for the latest transaction
+    public entry fun update_transaction_hash(
+        user: &signer,
+        vault_owner: address,
+        tx_hash: String,
+    ) acquires Vault {
+        let user_addr = signer::address_of(user);
+        assert!(exists<Vault>(vault_owner), EVAULT_NOT_FOUND);
+        
+        let vault = borrow_global_mut<Vault>(vault_owner);
+        
+        // Verify user is a member or creator of the vault
+        let is_member = vault.creator == user_addr || is_vault_member(user_addr, &vault.members);
+        assert!(is_member, ENOT_VAULT_MEMBER);
+
+        // Update the latest transaction hash
+        let history_length = vector::length(&vault.transaction_history);
+        if (history_length > 0) {
+            let latest_tx = vector::borrow_mut(&mut vault.transaction_history, history_length - 1);
+            latest_tx.tx_hash = tx_hash;
+        };
     }
 
     // Create a pending transaction (withdrawal request)
@@ -285,9 +338,24 @@ module meena_add::multisig{
         };
     }
 
-    // Execute a transaction (internal function)
+    // Execute a transaction (internal function)  
     fun execute_transaction(vault: &mut Vault, tx_index: u64) {
         let transaction = vector::borrow_mut(&mut vault.pending_transactions, tx_index);
+        
+        // Record withdrawal transaction in history before execution
+        vault.transaction_counter = vault.transaction_counter + 1;
+        let withdrawal_history = TransactionHistory {
+            id: vault.transaction_counter,
+            tx_type: string::utf8(b"withdrawal"),
+            from: vault.creator, // Use vault creator address as vault identifier
+            to: transaction.to,
+            amount: transaction.amount,
+            description: transaction.description,
+            tx_hash: string::utf8(b""), // Will be updated from frontend
+            timestamp: timestamp::now_seconds(),
+            executed_by: transaction.created_by,
+        };
+        vector::push_back(&mut vault.transaction_history, withdrawal_history);
         
         // Extract coins from vault
         let coins = coin::extract(&mut vault.balance, transaction.amount);
@@ -356,6 +424,13 @@ module meena_add::multisig{
         assert!(exists<Vault>(vault_owner), EVAULT_NOT_FOUND);
         let vault = borrow_global<Vault>(vault_owner);
         vault.pending_transactions
+    }
+
+    #[view]
+    public fun get_transaction_history(vault_owner: address): vector<TransactionHistory> acquires Vault {
+        assert!(exists<Vault>(vault_owner), EVAULT_NOT_FOUND);
+        let vault = borrow_global<Vault>(vault_owner);
+        vault.transaction_history
     }
 
     #[view]

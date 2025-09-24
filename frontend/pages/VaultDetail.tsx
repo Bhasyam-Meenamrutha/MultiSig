@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, Download, Users, Shield, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { useVault } from '@/context/VaultContext';
+import { TransactionHistory } from '@/types/vault';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -13,8 +14,8 @@ const VaultDetail = () => {
   const navigate = useNavigate();
   const { 
     getVaultById, 
-    getRequestsForVault, 
-    getTransactionsForVault,
+    getRequestsForVault,
+    getTransactionHistory,
     deposit, 
     requestWithdrawal, 
     approveRequest, 
@@ -24,13 +25,14 @@ const VaultDetail = () => {
 
   const vault = getVaultById(id!);
   const requests = getRequestsForVault(id!);
-  const transactions = getTransactionsForVault(id!);
 
   const [depositAmount, setDepositAmount] = useState('');
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawPurpose, setWithdrawPurpose] = useState('');
   const [showDepositModal, setShowDepositModal] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [blockchainHistory, setBlockchainHistory] = useState<TransactionHistory[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   if (!vault) {
     return (
@@ -45,12 +47,39 @@ const VaultDetail = () => {
 
   const pendingRequests = requests.filter(r => r.status === 'pending');
 
-  const handleDeposit = () => {
+  // Fetch transaction history from blockchain
+  useEffect(() => {
+    const fetchHistory = async () => {
+      if (!vault?.ownerAddress) return;
+      setLoadingHistory(true);
+      try {
+        const history = await getTransactionHistory(vault.ownerAddress);
+        setBlockchainHistory(history);
+      } catch (error) {
+        console.error('Failed to fetch transaction history:', error);
+      } finally {
+        setLoadingHistory(false);
+      }
+    };
+
+    fetchHistory();
+  }, [vault?.ownerAddress, getTransactionHistory]); // Only depend on ownerAddress, not the entire vault object
+
+  const handleDeposit = async () => {
     const amount = parseFloat(depositAmount);
     if (amount > 0) {
-      deposit(vault.id, amount);
-      setDepositAmount('');
-      setShowDepositModal(false);
+      const success = await deposit(vault.ownerAddress, amount);
+      if (success) {
+        setDepositAmount('');
+        setShowDepositModal(false);
+        // Refresh transaction history
+        try {
+          const history = await getTransactionHistory(vault.ownerAddress);
+          setBlockchainHistory(history);
+        } catch (error) {
+          console.error('Failed to refresh transaction history:', error);
+        }
+      }
     }
   };
 
@@ -130,7 +159,7 @@ const VaultDetail = () => {
                   </DialogHeader>
                   <div className="space-y-4">
                     <div>
-                      <Label htmlFor="depositAmount">Amount (USDC)</Label>
+                      <Label htmlFor="depositAmount">Amount (APT)</Label>
                       <Input
                         id="depositAmount"
                         type="number"
@@ -140,6 +169,9 @@ const VaultDetail = () => {
                         min="0"
                         step="0.01"
                       />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Minimum: 0.01 APT. Make sure you have enough APT in your wallet.
+                      </p>
                     </div>
                     <div className="flex space-x-2">
                       <Button variant="outline" onClick={() => setShowDepositModal(false)} className="flex-1">
@@ -166,7 +198,7 @@ const VaultDetail = () => {
                   </DialogHeader>
                   <div className="space-y-4">
                     <div>
-                      <Label htmlFor="withdrawAmount">Amount (USDC)</Label>
+                      <Label htmlFor="withdrawAmount">Amount (APT)</Label>
                       <Input
                         id="withdrawAmount"
                         type="number"
@@ -178,7 +210,7 @@ const VaultDetail = () => {
                         step="0.01"
                       />
                       <div className="text-sm text-muted-foreground mt-1">
-                        Available: {vault.balance.toLocaleString()} USDC
+                        Available: {vault.balance.toLocaleString()} APT
                       </div>
                     </div>
                     <div>
@@ -307,35 +339,62 @@ const VaultDetail = () => {
             </div>
           </div>
 
-          {/* Recent Transactions */}
+          {/* Blockchain Transaction History */}
           <div className="vault-card">
-            <h3 className="text-lg font-bold mb-4">Recent Activity</h3>
-            <div className="space-y-3">
-              {transactions.slice(-5).reverse().map((tx) => (
-                <div key={tx.id} className="flex items-center space-x-3 text-sm">
-                  <div className={`w-2 h-2 rounded-full ${
-                    tx.type === 'deposit' ? 'bg-success' :
-                    tx.type === 'withdrawal_complete' ? 'bg-warning' :
-                    tx.type === 'approval' ? 'bg-primary' :
-                    'bg-muted-foreground'
-                  }`} />
-                  <div className="flex-1">
-                    <div className="capitalize">
-                      {tx.type.replace('_', ' ')}
-                      {tx.amount && ` - ${tx.amount.toLocaleString()} USDC`}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {tx.timestamp.toLocaleString()}
+            <h3 className="text-lg font-bold mb-4">Transaction History</h3>
+            {loadingHistory ? (
+              <div className="text-center py-4">
+                <div className="inline-block animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+                <p className="text-sm text-muted-foreground mt-2">Loading transactions...</p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {blockchainHistory.slice().reverse().map((tx) => (
+                  <div key={tx.id} className="border-b border-border last:border-0 pb-3 last:pb-0">
+                    <div className="flex items-start space-x-3 text-sm">
+                      <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
+                        tx.txType === 'deposit' ? 'bg-success' :
+                        tx.txType === 'withdrawal' ? 'bg-warning' :
+                        'bg-primary'
+                      }`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-medium capitalize">
+                            {tx.txType}
+                          </span>
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {tx.amount.toLocaleString()} APT
+                          </span>
+                        </div>
+                        <div className="text-xs text-muted-foreground space-y-1">
+                          <div>{tx.description}</div>
+                          <div>From: {tx.from.slice(0, 10)}...{tx.from.slice(-6)}</div>
+                          <div>To: {tx.to.slice(0, 10)}...{tx.to.slice(-6)}</div>
+                          <div>{new Date(tx.timestamp * 1000).toLocaleString()}</div>
+                          {tx.txHash && (
+                            <div className="mt-1">
+                              <a
+                                href={`https://explorer.aptoslabs.com/txn/${tx.txHash}?network=testnet`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:text-primary/80 font-mono"
+                              >
+                                Tx: {tx.txHash.slice(0, 8)}...
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-              {transactions.length === 0 && (
-                <div className="text-sm text-muted-foreground text-center py-4">
-                  No transactions yet
-                </div>
-              )}
-            </div>
+                ))}
+                {blockchainHistory.length === 0 && (
+                  <div className="text-sm text-muted-foreground text-center py-4">
+                    No transactions yet
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
